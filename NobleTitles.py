@@ -1,12 +1,11 @@
-from gramps.gen.lib import Person
-from gramps.gen.plug.report import (MenuReportOptions, Report, stdoptions, utils)
-from gramps.gen.plug.menu import (PersonOption, PersonListOption, BooleanOption, ColorOption)
-from gramps.gen.lib import (EventType, AttributeType)
-from gramps.gen.utils.db import (get_birth_or_fallback, get_death_or_fallback)
-from gramps.gen.display.place import displayer as place_displayer
 from gramps.gen.datehandler import parser
-from gramps.gen.utils.symbols import Symbols
+from gramps.gen.display.place import displayer as place_displayer
+from gramps.gen.lib import (AttributeType, EventRoleType, EventType, FamilyRelType, Person)
+from gramps.gen.plug.report import (MenuReportOptions, Report, stdoptions, utils)
+from gramps.gen.plug.menu import (BooleanOption, ColorOption, PersonListOption, PersonOption)
+from gramps.gen.utils.db import (get_birth_or_fallback, get_death_or_fallback)
 from gramps.gen.utils.file import media_path_full
+from gramps.gen.utils.symbols import Symbols
 from gramps.gen.utils.thumbnails import get_thumbnail_path
 
 class NobleTitlesOptions(MenuReportOptions):
@@ -68,7 +67,16 @@ class NobleTitles(Report):
         symbols = Symbols()
         self.symbols = {
             'birth': symbols.get_symbol_for_string(symbols.SYMBOL_BIRTH),
-            'death': symbols.get_death_symbol_for_char(symbols.DEATH_SYMBOL_LATIN_CROSS)
+            'death': symbols.get_death_symbol_for_char(symbols.DEATH_SYMBOL_LATIN_CROSS),
+            'illegitimate': symbols.get_symbol_for_string(symbols.SYMBOL_ILLEGITIM),
+            'kia': symbols.get_symbol_for_string(symbols.SYMBOL_KILLED_IN_ACTION),
+
+            # marriage symbols display with extra linebreaks in Graphviz family nodes
+            # todo: using fallbacks for now
+            'engaged': symbols.get_symbol_fallback(symbols.SYMBOL_ENGAGED),
+            'married': symbols.get_symbol_fallback(symbols.SYMBOL_MARRIAGE),
+            'unmarried': symbols.get_symbol_fallback(symbols.SYMBOL_UNMARRIED_PARTNERSHIP),
+            'divorced': symbols.get_symbol_fallback(symbols.SYMBOL_DIVORCE)
         }
 
     def begin_report(self):
@@ -77,6 +85,7 @@ class NobleTitles(Report):
 
         for gid in self._gidlist:
             person = self.database.get_person_from_gramps_id(gid)
+            self._people.add(person.get_handle())
 
             if self._withchildren:
                 self.add_children(person)
@@ -89,13 +98,12 @@ class NobleTitles(Report):
         self.write_families()
 
     def add_children(self, person):
-        self._people.add(person.get_handle())
-
         for family_handle in person.get_family_handle_list():
             self._families.add(family_handle)
 
             family = self.database.get_family_from_handle(family_handle)
             for childref in family.get_child_ref_list():
+                self._people.add(childref.ref)
                 child = self.database.get_person_from_handle(childref.ref)
                 self.add_children(child)
 
@@ -126,13 +134,34 @@ class NobleTitles(Report):
         for handle in self._families:
             family = self.database.get_family_from_handle(handle)
 
+            newline = "\n"
+            label = ''
+            for event_ref in family.get_event_ref_list():
+                event = self.database.get_event_from_handle(event_ref.ref)
+                if (event.get_type() == EventType.ENGAGEMENT):
+                    label += '%s %s%s' % (self.symbols['engaged'],
+                                          self._get_date(event.get_date_object()),
+                                          newline)
+                if (event.get_type() == EventType.MARRIAGE):
+                    label += '%s %s' % (self.symbols['married'],
+                                        self._get_date(event.get_date_object()))
+                elif ((event.get_type() == EventType.ANNULMENT) or
+                      (event.get_type() == EventType.DIVORCE)):
+                    label += '%s%s %s' % (newline,
+                                          self.symbols['divorced'],
+                                          self._get_date(event.get_date_object()))
+
+            if not label:
+                if family.get_relationship() == FamilyRelType.MARRIED:
+                    label += self.symbols['married']
+                elif family.get_relationship() == FamilyRelType.UNMARRIED:
+                    label += self.symbols['unmarried']
+
             self.doc.add_node(node_id=family.get_gramps_id(),
-                              label='family',
+                              label=label,
                               shape='ellipse',
-                              color='',
                               style='solid,filled',
-                              fillcolor='#ffffe0',
-                              htmloutput=False)
+                              fillcolor='#ffffe0')
 
             self.doc.start_subgraph(family.get_gramps_id())
 
@@ -142,10 +171,8 @@ class NobleTitles(Report):
                     father = self.database.get_person_from_handle(father_handle)
                     self.doc.add_link(id1=father.get_gramps_id(),
                                       id2=family.get_gramps_id(),
-                                      style='',
                                       head='none',
-                                      tail='none',
-                                      comment='')
+                                      tail='none')
 
             mother_handle = family.get_mother_handle()
             if mother_handle:
@@ -153,10 +180,8 @@ class NobleTitles(Report):
                     mother = self.database.get_person_from_handle(mother_handle)
                     self.doc.add_link(id1=mother.get_gramps_id(),
                                       id2=family.get_gramps_id(),
-                                      style='',
                                       head='none',
-                                      tail='none',
-                                      comment='')
+                                      tail='none')
 
             self.doc.end_subgraph()
 
@@ -165,10 +190,8 @@ class NobleTitles(Report):
                     child = self.database.get_person_from_handle(childref.ref)
                     self.doc.add_link(id1=family.get_gramps_id(),
                                       id2=child.get_gramps_id(),
-                                      style='',
                                       head='none',
-                                      tail='none',
-                                      comment='')
+                                      tail='none')
 
     def write_people(self):
         for handle in self._people:
@@ -192,35 +215,58 @@ class NobleTitles(Report):
 
             birth = get_birth_or_fallback(self.database, person)
             if birth:
-                label += '%s%s %s %s' % (newline,
-                                         self.symbols['birth'],
-                                         self._get_date(birth.get_date_object()),
-                                         place_displayer.display_event(self.database, birth))
+                birth_symbol = self.symbols['birth']
+                fam_handle = person.get_main_parents_family_handle()
+                if fam_handle:
+                    family = self.database.get_family_from_handle(fam_handle)
+                    if (family.type == FamilyRelType.UNMARRIED):
+                        birth_symbol = self.symbols['illegitimate']
+
+                birthdate = self._get_date(birth.get_date_object())
+                birthplace = place_displayer.display_event(self.database, birth)
+
+                label += '<br/>%s' % birth_symbol
+                if birthdate:
+                    label += ' %s' % birthdate
+                if birth.description:
+                    label += ' (%s)' % birth.description
+                if birthplace:
+                    label += ' %s' % birthplace
 
             death = get_death_or_fallback(self.database, person)
             if death:
-                label += '%s%s %s %s' % (newline,
-                                         self.symbols['death'],
-                                         self._get_date(death.get_date_object()),
-                                         place_displayer.display_event(self.database, death))
+                deathdate = self._get_date(death.get_date_object())
+                deathplace = place_displayer.display_event(self.database, death)
+
+                label += '<br/>%s ' % self.symbols['death']
+                if deathdate:
+                    label += ' %s' % deathdate
+                if death.description:
+                    label += ' (%s)' % death.description
+                if deathplace:
+                    label += ' %s' % deathplace
 
             for event_ref in person.get_primary_event_ref_list():
                 event = self.database.get_event_from_handle(event_ref.ref)
-                if (event and event.get_type() == EventType.NOB_TITLE):
+                if event.get_type() == EventType.NOB_TITLE:
                     title = event.get_description()
 
                     for attribute in event_ref.get_attribute_list():
                         if attribute.get_type() == AttributeType.TIME:
                             title += ' %s' % self._get_date(parser.parse(attribute.get_value()))
 
-                    label += '%s%s' % (newline, title)
+                    label += '<br/>%s' % title
+                if event.get_type() == EventType.MILITARY_SERV:
+                    for attribute in event_ref.get_attribute_list():
+                        if ((attribute.get_type() == AttributeType.DESCRIPTION) and
+                            (attribute.get_value() == 'Killed in Action')):
+                            label += '<br/>%s %s' % (self.symbols['kia'], event.get_description())
 
             label += '</td></tr></table>'
 
             self.doc.add_node(node_id=person.gramps_id,
                               label=label,
                               shape='box',
-                              color='',
                               style='solid,filled',
                               fillcolor=self.fillcolor[person.get_gender()],
                               htmloutput=True)

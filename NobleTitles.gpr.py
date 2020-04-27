@@ -1,0 +1,15 @@
+register(REPORT,
+        id = 'NobleTitles',
+        name = _('Noble Titles Report'),
+        description = _('Noble Titles Report'),
+        version = '1.0',
+        gramps_target_version = '5.1',
+        status = STABLE,
+        fname = 'NobleTitles.py',
+        authors = [],
+        authors_email = [],
+        category = CATEGORY_GRAPHVIZ,
+        reportclass = 'NobleTitles',
+        optionclass = 'NobleTitlesOptions',
+        report_modes = [REPORT_MODE_GUI, REPORT_MODE_CLI]
+        )
